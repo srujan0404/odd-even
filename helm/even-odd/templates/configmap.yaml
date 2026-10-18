@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "even-odd.name" . }}
+  labels:
+    {{- include "even-odd.labels" . | nindent 4 }}
+data:
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  SHOW_MESSAGE: {{ .Values.config.showMessage | quote }}
+  {{- if .Values.tracing.enabled }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.tracing.endpoint | quote }}
+  OTEL_SERVICE_NAME: even-odd
+  {{- end }}

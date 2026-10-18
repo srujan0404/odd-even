@@ -1,0 +1,6 @@
+apiVersion: v2
+name: even-odd
+description: Even or odd checker
+type: application
+version: 0.1.0
+appVersion: "dev"
