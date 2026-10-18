@@ -1,0 +1,127 @@
+evidence collected 2026-10-18T07:20:58Z
+git commit:       09a8567d6b7fe945ecea5b4662f0881919a5b96c
+running version:  09a8567d6b7fe945ecea5b4662f0881919a5b96c
+
+==================================================================
+== source -> image: helm release history (description has the image tag)
+==================================================================
+REVISION	UPDATED                 	STATUS    	CHART         	APP VERSION	DESCRIPTION                                                                                                          
+2       	Sat Oct 17 17:49:13 2026	failed    	even-odd-0.1.0	dev        	Upgrade "even-odd" failed: resource Deployment/even-odd/even-odd not ready. status: InProgress, message: Updated: ...
+3       	Sat Oct 17 17:50:13 2026	superseded	even-odd-0.1.0	dev        	Rollback to 1                                                                                                        
+4       	Sat Oct 17 17:52:30 2026	superseded	even-odd-0.1.0	dev        	fix error ratio rule                                                                                                 
+5       	Sat Oct 17 17:57:50 2026	superseded	even-odd-0.1.0	dev        	image local-1792240067                                                                                               
+6       	Sun Oct 18 12:48:16 2026	deployed  	even-odd-0.1.0	dev        	image 09a8567d6b7fe945ecea5b4662f0881919a5b96c                                                                       
+
+==================================================================
+== runtime: pods, the image they run and the version label
+==================================================================
+POD                         READY   RESTARTS   IMAGE                                               VERSION
+even-odd-5786776dc8-qmpft   true    0          even-odd:09a8567d6b7fe945ecea5b4662f0881919a5b96c   09a8567d6b7fe945ecea5b4662f0881919a5b96c
+even-odd-5786776dc8-x9cqn   true    0          even-odd:09a8567d6b7fe945ecea5b4662f0881919a5b96c   09a8567d6b7fe945ecea5b4662f0881919a5b96c
+
+NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/even-odd   2/2     2            2           19h
+
+NAME               TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+service/even-odd   ClusterIP   10.96.104.54   <none>        80/TCP    19h
+
+NAME                                 CLASS   HOSTS                ADDRESS     PORTS   AGE
+ingress.networking.k8s.io/even-odd   nginx   even-odd.localhost   localhost   80      19h
+
+NAME                                           REFERENCE             TARGETS        MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/even-odd   Deployment/even-odd   cpu: 13%/70%   2         5         2          19h
+
+NAME                                  MIN AVAILABLE   MAX UNAVAILABLE   ALLOWED DISRUPTIONS   AGE
+poddisruptionbudget.policy/even-odd   1               N/A               1                     19h
+
+NAME                                       POD-SELECTOR                                                          AGE
+networkpolicy.networking.k8s.io/even-odd   app.kubernetes.io/instance=even-odd,app.kubernetes.io/name=even-odd   19h
+
+==================================================================
+== user journey through the ingress
+==================================================================
+PASS  even number -> 200 {"even":true,"number":10}
+PASS  odd number -> 200 {"even":false,"number":7}
+PASS  negative -> 200 {"even":true,"number":-4}
+PASS  not a number -> 400 {"error":"number must be a whole number"}
+PASS  missing -> 400 {"error":"number is required"}
+PASS  version -> 200 {"version":"09a8567d6b7fe945ecea5b4662f0881919a5b96c"}
+smoke test passed
+
+response headers:
+HTTP/1.1 200 OK
+X-Request-ID: 53d433e66c6d8e63f619db7ece61d1af
+X-App-Version: 09a8567d6b7fe945ecea5b4662f0881919a5b96c
+
+==================================================================
+== not exposed: /metrics through the ingress should be 404
+==================================================================
+  status 404
+
+==================================================================
+== security: pod security admission rejects a pod without the restricted settings
+==================================================================
+Error from server (Forbidden): pods "psa-test" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "psa-test" must set securityContext.allowPrivilegeEs
+
+==================================================================
+== security: network policy
+==================================================================
+  from default namespace (should be blocked):
+wget: download timed out
+  blocked
+  from monitoring namespace (should work):
+{"version":"09a8567d6b7fe945ecea5b4662f0881919a5b96c"}
+
+
+==================================================================
+== security: container runs as
+==================================================================
+uid=10001(appuser) gid=10001(appuser) groups=10001(appuser)
+touch: cannot touch '/srv/x': Read-only file system
+
+==================================================================
+== metrics: prometheus targets
+==================================================================
+  {'__name__': 'up', 'container': 'app', 'endpoint': 'http', 'instance': '10.244.0.34:5000', 'job': 'even-odd', 'namespace': 'even-odd', 'pod': 'even-odd-5786776dc8-qmpft', 'service': 'even-odd'} 1
+  {'__name__': 'up', 'container': 'app', 'endpoint': 'http', 'instance': '10.244.0.35:5000', 'job': 'even-odd', 'namespace': 'even-odd', 'pod': 'even-odd-5786776dc8-x9cqn', 'service': 'even-odd'} 1
+
+==================================================================
+== metrics: requests by status
+==================================================================
+  {'status': '200'} 169
+  {'status': '400'} 4
+
+==================================================================
+== metrics: SLO, success ratio and p95 latency over 5m
+==================================================================
+  {} 1
+  {'__name__': 'evenodd:latency_p95:rate5m'} 0.00475
+
+==================================================================
+== metrics: running version
+==================================================================
+  {'__name__': 'evenodd_build_info', 'container': 'app', 'endpoint': 'http', 'instance': '10.244.0.34:5000', 'job': 'even-odd', 'namespace': 'even-odd', 'pod': 'even-odd-5786776dc8-qmpft', 'service': 'even-odd', 'version': '09a8567d6b7fe945ecea5b4662f0881919a5b96c'} 1
+  {'__name__': 'evenodd_build_info', 'container': 'app', 'endpoint': 'http', 'instance': '10.244.0.35:5000', 'job': 'even-odd', 'namespace': 'even-odd', 'pod': 'even-odd-5786776dc8-x9cqn', 'service': 'even-odd', 'version': '09a8567d6b7fe945ecea5b4662f0881919a5b96c'} 1
+
+==================================================================
+== alerts: current state of even-odd alerts
+==================================================================
+  EvenOddDown inactive ok
+  EvenOddHighErrorRate inactive ok
+  EvenOddSlow inactive ok
+  EvenOddRestarting inactive ok
+
+==================================================================
+== logs: last 3 request lines
+==================================================================
+Found 2 pods, using pod/even-odd-5786776dc8-qmpft
+{"time": "2026-10-18T07:20:58", "level": "INFO", "message": "request", "version": "09a8567d6b7fe945ecea5b4662f0881919a5b96c", "request_id": "a341142cbc3ae132051cb855cf27111c", "trace_id": "1bfefc1e08dabf14f06da89806d788ee", "method": "GET", "path": "/check", "query": "", "status": 400, "duration_ms": 0.25}
+{"time": "2026-10-18T07:20:58", "level": "INFO", "message": "request", "version": "09a8567d6b7fe945ecea5b4662f0881919a5b96c", "request_id": "c2c6b61e888070f10e4d4e17f70281ba", "trace_id": "ecfcba400eb8ba50bf7c5c1ea0ad6ea4", "method": "GET", "path": "/version", "query": "", "status": 200, "duration_ms": 0.13}
+{"time": "2026-10-18T07:21:06", "level": "INFO", "message": "request", "version": "09a8567d6b7fe945ecea5b4662f0881919a5b96c", "request_id": "f9f583ec-78e1-4ef2-93fe-3b6138ca3e88", "trace_id": "e4c549e86fa317b758a727d720642623", "method": "GET", "path": "/version", "query": "", "status": 200, "duration_ms": 0.27}
+
+==================================================================
+== traces: latest even-odd traces in jaeger
+==================================================================
+  e4c549e86fa317b758a727d720642623 GET /version
+  bf770d2334156140dce0e153deb6ed2f GET /check
+  9f7f1e9838bceca13c2e5ff4abf22f88 GET /version
