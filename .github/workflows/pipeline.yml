@@ -1,0 +1,178 @@
+name: pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: even-odd
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: install
+        run: pip install -r requirements-dev.txt
+
+      - name: lint
+        run: flake8 app tests
+
+      - name: unit tests
+        run: python -m pytest -v --cov=app --cov-fail-under=80
+
+      - name: bandit (python security lint)
+        run: bandit -r app
+
+      - name: pip-audit (known vulnerable packages)
+        run: pip-audit -r app/requirements.txt
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - name: helm lint
+        run: |
+          helm lint helm/even-odd --set image.tag=ci
+          helm lint helm/even-odd --set image.tag=ci -f helm/even-odd/values-local.yaml
+      - name: render
+        run: helm template even-odd helm/even-odd --set image.tag=ci -f helm/even-odd/values-local.yaml
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          build-args: APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # the same image file is used by the deploy test and the publish job, it is only built once
+      - name: save image
+        run: docker save ${{ env.IMAGE }}:${{ github.sha }} -o image.tar
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image
+          path: image.tar
+          retention-days: 7
+
+  deploy-test:
+    needs: [build, chart, secret-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: image
+
+      - uses: azure/setup-helm@v5
+
+      - name: create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: ci
+
+      - name: load image into kind
+        run: kind load image-archive image.tar --name ci
+
+      - name: deploy with helm
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          helm upgrade --install even-odd helm/even-odd -n even-odd \
+            -f helm/even-odd/values-ci.yaml \
+            --set image.tag=${{ github.sha }} \
+            --description "image ${{ github.sha }}" \
+            --wait --timeout 3m
+
+      - name: smoke test
+        run: |
+          kubectl -n even-odd port-forward svc/even-odd 8080:80 &
+          for _ in $(seq 1 30); do
+            curl -sf localhost:8080/version && break
+            sleep 1
+          done
+          scripts/smoke-test.sh http://localhost:8080 ${{ github.sha }}
+
+      - name: show state
+        if: always()
+        run: |
+          helm -n even-odd history even-odd || true
+          kubectl -n even-odd get all
+          kubectl -n even-odd get events --sort-by=.lastTimestamp | tail -20
+          kubectl -n even-odd logs deploy/even-odd --tail=20 || true
+
+  publish:
+    # runs after merge to main, or when started by hand (workflow_dispatch) on a branch.
+    # either way someone has to approve the production environment first
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: image
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: push to ghcr
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REMOTE="ghcr.io/$OWNER/even-odd:${{ github.sha }}"
+          docker load -i image.tar
+          docker tag "${{ env.IMAGE }}:${{ github.sha }}" "$REMOTE"
+          docker push "$REMOTE"
+          {
+            echo "### published"
+            echo "image: \`$REMOTE\`"
+            echo "deploy locally with: \`make deploy-release TAG=${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
